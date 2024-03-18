@@ -1,0 +1,601 @@
+﻿Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+Variable.Global.sSourceDir.Declare(String)
+Variable.Global.sDestDir.Declare(String)
+Variable.Global.sPURORDER.Declare(String)
+Variable.Global.sPONumber.Declare(String)
+Variable.Global.sUPLSummary.Declare(String)
+Variable.Global.iWait.Declare(Long,0)
+Variable.Global.bPO.Declare(Boolean,False)
+V.Global.sPOList.Declare
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'TJS, February 2021
+'AWI Manufacturing, Inc.
+'Business Case: The customer would like to modify ARC 4111 (previously modified for AWI during VT) to dynamically pull the part number in correct on the PO upload 
+'so that the info on the PO Lines screen correctly populates the appropriate fields tied to that Part Number [Description, MFG name, MFG Part No
+V.Local.sError.Declare(String)
+V.Local.bExists.Declare
+V.Local.iCt.Declare
+V.Local.iPos.Declare
+V.Local.sDirectory.Declare
+V.Local.sFiles.Declare
+V.Local.sMsg.Declare
+V.Local.sServer.Declare
+V.Local.sSql.Declare
+
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+'Bryan Pham - 05/11/2021
+f.Intrinsic.Control.If(v.Caller.Hook,=,16850)
+	v.Passed.000065.Set("PO Upload")
+	f.Intrinsic.Control.End
+f.Intrinsic.Control.EndIf
+
+F.Intrinsic.UI.InvokeWaitDialog("Loading . . . ","PO Upload")
+F.Intrinsic.UI.ChangeWaitStatus("Loading . . .",V.Global.iWait)
+
+F.Intrinsic.String.Instr(V.Caller.FilesDir,"\",3,V.Local.iPos)
+F.Intrinsic.String.Left(V.Caller.FilesDir,V.Local.iPos,V.Local.sServer)
+
+'---### Set & Check for source & destination Directories ###---
+F.Intrinsic.String.Concat(V.Local.sServer,"PO_Detail\",V.Caller.CompanyCode,V.Global.sSourceDir)
+F.Intrinsic.String.Concat(V.Local.sServer,"PO_Detail\History\",V.Caller.CompanyCode,V.Global.sDestDir)
+F.Intrinsic.File.DirExists(V.Global.sSourceDir,V.Local.bExists)
+F.Intrinsic.Math.Add(V.Global.iWait,2,V.Global.iWait)
+F.Intrinsic.UI.ChangeWaitStatus("Loading . . .",V.Global.iWait)
+F.Intrinsic.Control.If(V.Local.bExists,=,False)
+	F.Intrinsic.String.Concat(V.Global.sSourceDir," Directory does not exist",V.Local.sMsg)
+	F.Intrinsic.UI.Msgbox(V.Local.sMsg)
+	F.Intrinsic.UI.CloseWaitDialog
+	F.Intrinsic.control.end
+F.Intrinsic.Control.EndIf
+F.Intrinsic.File.DirExists(V.Global.sDestDir,V.Local.bExists)
+F.Intrinsic.Control.If(V.Local.bExists,=,False)
+	F.Intrinsic.String.Concat(V.Global.sDestDir," Directory does not exist",V.Local.sMsg)
+	F.Intrinsic.UI.Msgbox(V.Local.sMsg)
+	F.Intrinsic.UI.CloseWaitDialog
+	F.Intrinsic.control.end
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Math.Add(V.Global.iWait,3,V.Global.iWait)
+F.Intrinsic.UI.ChangeWaitStatus("Loading . . .",V.Global.iWait)
+
+'---### Get the list of CSV files ###---
+'Windows open file dialog
+F.Intrinsic.UI.ShowOpenFileDialog("", "",V.Global.sSourceDir,v.Local.sFiles)
+f.Intrinsic.Control.If(v.Local.sFiles,!=,"***CANCEL***")
+	F.Intrinsic.String.Split(V.Local.sFiles,":",V.Local.sFiles)
+f.Intrinsic.Control.Else
+	f.Intrinsic.Control.End
+F.Intrinsic.Control.EndIf
+		
+'F.Intrinsic.String.Concat(V.Global.sSourceDir,"\*.csv",V.Local.sDirectory)
+'F.Intrinsic.File.GetFileList(V.Local.sDirectory,V.Local.sFiles)
+'6282 - Adding check if no files exist in source directory
+'F.Intrinsic.Control.If(V.Local.sFiles.Trim,=,"")
+'	F.Intrinsic.UI.CloseWaitDialog
+'	F.Intrinsic.UI.Msgbox("No files in source directory","Error")
+'	F.Intrinsic.Control.End
+'F.Intrinsic.Control.EndIf
+'/6282
+
+F.Intrinsic.Math.Add(V.Global.iWait,5,V.Global.iWait)
+F.Intrinsic.UI.ChangeWaitStatus("Loading . . .",V.Global.iWait)
+
+'---### DB Connection ###---
+F.ODBC.Connection!Con.OpenCompanyConnection
+'F.ODBC.Connection!Con.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+
+'---### Create PURORDER.txt file ###---
+F.Intrinsic.Control.For(V.Local.iCt,V.Local.sFiles.LBound,V.Local.sFiles.UBound,1)
+	F.Intrinsic.Control.CallSub(Purorder,"FileName",V.Local.sFiles(V.Local.iCt))
+	''''---### Upload POs ###---
+	F.Intrinsic.Control.CallSub(Uploadpo)
+F.Intrinsic.Control.Next(V.Local.iCt)
+
+F.ODBC.Connection!Con.Close
+
+F.Intrinsic.UI.ChangeWaitStatus("Uploading POs. . .",100)
+F.Intrinsic.UI.CloseWaitDialog
+
+F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_6282_UPLPUROR.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+Program.Sub.Main.End
+
+Program.Sub.PURORDER.Start
+'---### Create PURORDER.TXT from the .csv files.###---
+V.Local.sError.Declare(String)
+V.Local.bExceptions.Declare(Boolean,False)
+V.Local.bHeader.Declare(Boolean,True)
+V.Local.bUplSuccessful.Declare(Boolean,True)
+V.Local.bVendor.Declare
+V.Local.iCt.Declare
+V.Local.iCount.Declare
+V.Local.iLinkID.Declare
+V.Local.iQty.Declare
+V.Local.iRecCount.Declare
+V.Local.sCSV.Declare
+V.Local.sCurrency.Declare
+V.Local.sDocs.Declare
+V.Local.sField.Declare
+V.Local.sFile.Declare
+V.Local.sFileType.Declare
+V.Local.sGL.Declare
+V.Local.sLine.Declare
+V.Local.sNewFile.Declare
+V.Local.sPart.Declare
+V.Local.sPO.Declare
+V.Local.sTemp.Declare
+V.Local.sPONumber.Declare
+V.Local.sPURORDER.Declare
+V.Local.sSql.Declare
+V.Local.sTarget.Declare
+V.Local.sUPLSummary.Declare
+V.Local.sVenID.Declare
+V.Local.sVenName.Declare
+V.Local.sVenAdd1.Declare
+V.Local.sVenAdd2.Declare
+V.Local.sVenCity.Declare
+V.Local.sVenState.Declare
+V.Local.sVenZip.Declare
+V.Local.sVenCountry.Declare
+V.Local.sVenAttn.Declare
+V.Local.dDate.Declare
+V.Local.sTempFull.Declare
+V.Local.sJob.Declare
+V.Local.iPos.Declare
+
+V.Local.sDesc.Declare
+V.Local.iTmp.Declare
+V.Local.sClean.Declare
+v.Local.iPO1.Declare
+v.Local.iPO2.Declare
+
+F.Intrinsic.Control.SetErrorHandler("PURORDER_Err")
+F.Intrinsic.Control.ClearErrors
+
+
+'---### Read File ###---
+'F.Intrinsic.String.Concat(V.Global.sSourceDir,"\",V.Args.FileName,V.Local.sFile)
+v.Local.sFile.Set(V.Args.FileName)
+F.Intrinsic.File.File2String(V.Local.sFile,V.Local.sCSV)
+F.Intrinsic.String.Split(V.Local.sCSV,V.Ambient.NewLine,V.Local.sCSV)
+
+'6282 - Removing excess array elements created by splitting on V.Ambient.NewLine
+F.Intrinsic.Control.DoUntil(V.Local.sClean,<>,"")
+	V.Local.iTmp.Set(V.Local.sCSV.UBound)
+	F.Intrinsic.Control.If(V.Local.sCSV(V.Local.iTmp).Trim,=,"")
+		F.Intrinsic.Math.Sub(V.Local.iTmp,1,V.Local.iTmp)
+		V.Local.sCSV.RedimPreserve(0,V.Local.iTmp)
+		V.Local.sClean.Set(V.Local.sCSV(V.Local.iTmp))
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Loop
+'/6282
+
+F.Intrinsic.Control.For(V.Local.iCount,1,V.Local.sCSV.UBound,1)
+	V.Local.sLine.RedimPreserve(0,0)
+	F.Intrinsic.String.Split(V.Local.sCSV(V.Local.iCount),",",V.Local.sLine)
+	
+	F.Intrinsic.Control.If(V.Local.sLine.UBound,=,0)
+		F.Intrinsic.Control.ExitFor(V.Local.iCount)
+	F.Intrinsic.Control.EndIf
+'---### Get Last PO Number ###---
+	F.Intrinsic.Control.If(V.Local.iCount,=,1,AND,V.Local.sLine(11),=,"")
+		F.ODBC.Connection!con.ExecuteAndReturn("Select Last_PO_Num From Last_PO Where Ass_Sys = 'PUR' And Ass_Sub_Sys = 'CTL';",V.Local.iPO1)
+		
+		F.ODBC.Connection!con.ExecuteAndReturn("Select F_LONG from OP_HEADER Where ID = 400301 and SEQUENCE = 000;",V.Local.iPO2)
+
+		'this is to fix the issue with inconsistent info from 2 tables
+		f.Intrinsic.Control.If(v.Local.iPO1,>=,v.Local.iPO2)
+			V.Local.iPos.Set(v.Local.iPO1)
+		f.Intrinsic.Control.Else
+			V.Local.iPos.Set(v.Local.iPO2)
+		f.Intrinsic.Control.EndIf
+		F.Intrinsic.String.LPad(V.Local.iPos.++,"0",7,V.Global.sPONumber)
+	F.Intrinsic.Control.ElseIf(V.Local.iCount,=,1,AND,V.Local.sLine(11).Trim,>,"")
+		F.Intrinsic.String.LPad(V.Local.sLine(11),"0",7,V.Global.sPONumber)
+		V.Global.bPO.Set(True)
+		V.Local.bHeader.Set(False)
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.If(V.Global.sPOList.Trim,=,"")
+		V.Global.sPOList.Set(V.Global.sPONumber)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.String.Build("{0}{1}{2}",V.Global.sPOList.Trim,V.Ambient.NewLine,V.Global.sPONumber,V.Global.sPOList)
+	F.Intrinsic.Control.EndIf
+		
+	'---# Vendor Info #--
+	V.Local.sVenID.Set(V.Local.sLine(0).Trim)
+	F.Intrinsic.Control.If(V.Local.sVenID.Trim,=,"")
+	F.Intrinsic.Control.AndIf(V.Local.iCount,=,V.Local.sCSV.UBound)
+		F.Intrinsic.Control.ExitFor(V.Local.iCount)
+	F.Intrinsic.Control.Endif
+
+	V.Local.iQty.Set(V.Local.sLine(6))
+	F.Intrinsic.String.RPad(V.Local.sLine(2)," ",20,V.Local.sPart)
+	F.Intrinsic.Control.If(V.Local.sVenID.Trim,=,"")
+		V.Local.bUplSuccessful.Set(False)
+		V.Local.bVendor.Set(False)
+		F.Intrinsic.String.Concat(V.Local.sUPLSummary,V.Ambient.NewLine,V.Local.sPart,V.Ambient.Tab,V.Local.iQty,": Vendor Missing",V.Local.sUPLSummary)
+	F.Intrinsic.Control.Else
+		V.Local.bVendor.Set(True)
+		F.Intrinsic.String.Concat(V.Local.sUPLSummary,V.Ambient.NewLine,V.Local.sPart,V.Ambient.Tab,V.Local.iQty,V.Local.sUPLSummary)
+	F.Intrinsic.Control.EndIf
+	'JOB & SUFFIX
+	F.Intrinsic.Control.If(V.Local.sLine(9).Trim,>,"")
+		F.Intrinsic.String.Split(V.Local.sLine(9),"-",V.Local.sJob)
+	F.Intrinsic.Control.Else
+		V.Local.sJob.Set("")
+	F.Intrinsic.Control.EndIf
+	
+	'F.Intrinsic.String.RPad(V.Local.sVenID.Trim,"",6,V.Local.sVenID)
+	'--# Header #--
+	F.Intrinsic.Control.If(V.Local.bHeader,=,True)
+		V.Local.bHeader.Set(False)
+		F.Intrinsic.String.Concat("select V.vendor, V.name_vendor, V.address1, V.address2, V.City, V.rec , V.state, V.Code_Zip, V.Country, V.attention, V.Normal_GL_Account, C.Buyer+C.Territory as CurrencyCode from VENDOR_MASTER as V left join (select *  from VENDOR_MASTER where rec=4)as c on c.vendor=V.vendor where V.rec=1 and V.Vendor='",V.local.sVenID,"'",V.Local.sSql)
+		F.ODBC.Connection!Con.OpenLocalRecordsetRO("rstVend",V.Local.sSql)
+		F.Intrinsic.Control.If(V.ODBC.Con!rstVend.EOF,=,False)
+			V.Local.sVenName.Set(V.ODBC.Con!rstVend.FieldValTrim!name_vendor)
+			V.Local.sVenAdd1.Set(V.ODBC.Con!rstVend.FieldValTrim!address1)
+			V.Local.sVenAdd2.Set(V.ODBC.Con!rstVend.FieldValTrim!address2)
+			V.Local.sVenCity.Set(V.ODBC.Con!rstVend.FieldValTrim!City)
+			V.Local.sVenState.Set(V.ODBC.Con!rstVend.FieldValTrim!State)
+			V.Local.sVenZip.Set(V.ODBC.Con!rstVend.FieldValTrim!Code_Zip)
+			V.Local.sVenAttn.Set(V.ODBC.Con!rstVend.FieldValTrim!Attention)
+			V.Local.sGL.Set(V.ODBC.Con!rstVend.FieldValTrim!Normal_GL_Account)
+			V.Local.sCurrency.Set(V.ODBC.Con!rstVend.FieldValTrim!CurrencyCode)
+		F.Intrinsic.Control.Else
+			V.Local.bUplSuccessful.Set(False)
+			F.Intrinsic.Control.If(V.Local.bVendor,=,True)
+				F.Intrinsic.String.Concat(V.Local.sUPLSummary,": Invalid Vendor",V.Local.sUPLSummary)
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.EndIf
+		F.ODBC.Con!rstVend.Close
+
+		F.Intrinsic.Math.Add(V.Global.iWait,1,V.Global.iWait)
+		F.Intrinsic.UI.ChangeWaitStatus("Generating . . .",V.Global.iWait)
+
+		'A
+		'PO #, Filler, Record Type, Order Tax Code, Insurance, Buyer Code, Area, Branch,
+		F.Intrinsic.String.Concat(V.Global.sPONumber.Trim,"  ","A",V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",12,V.Local.sTemp)
+		'buyer code
+		F.Intrinsic.Control.If(V.Local.sLine(12),>,"",AND,V.Local.sLine(12),<>,"OOB")
+			F.Intrinsic.String.Build("SELECT BUYER_CODE FROM V_BUYERS WHERE UCASE(BUYER) = '{0}'",V.Local.sLine(12).UCASE,V.Local.sSql)
+			F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSql,V.Local.sField)
+			F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sField,V.Local.sTemp)
+		F.Intrinsic.Control.EndIf
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",195,V.Local.sTemp)
+		'order date
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Ambient.Date.FormatMMDDYY,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.local.sTemp," ",207,V.local.sTemp)
+		'Due Date
+		F.Intrinsic.Control.If(V.Local.sLine(7).Trim,>,"")
+			F.Intrinsic.Date.ConvertDString(V.Local.sLine(7),"MM/DD/YYYY",V.Local.dDate)
+			F.Intrinsic.String.Format(V.Local.dDate,"MMDDYY",V.Local.sField)
+			F.Intrinsic.String.Concat(V.local.sTemp,V.Local.sField,V.local.sTemp)
+		F.Intrinsic.Control.EndIf
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",229,V.Local.sTemp)
+		'GL Account, Account Closed
+		F.Intrinsic.String.Concat(V.local.sTemp,V.Local.sGL,V.local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",267,V.Local.sTemp)
+		'SB Paid, Print, WO Sfx, WO Seq, Vendor, Certificates
+		V.Local.sField.Set("")
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenID,V.local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",374,V.Local.sTemp)
+
+		F.Intrinsic.String.Concat(V.Local.sTempFull,V.Local.sTemp,V.Ambient.NewLine,V.Local.sTempFull)
+
+V.Local.sTemp.Set("")
+		'B
+		'PO#, Filler, Rec Type,
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Global.sPONumber,"  B",V.Local.sTemp)
+		'vendor name
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenName,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",40,V.Local.sTemp)
+		'address 1
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenAdd1,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",70,V.Local.sTemp)
+		'address 2
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenAdd2,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",190,V.Local.sTemp)
+		
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenCity,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",210,V.Local.sTemp)
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenState,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",212,V.Local.sTemp)
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenZip,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",237,V.Local.sTemp)
+		'Attention
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenAttn,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",327,V.Local.sTemp)
+		'vendor id
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenID,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",490,V.Local.sTemp)
+		
+		F.Intrinsic.String.Concat(V.Local.sTempFull,V.Local.sTemp,V.Ambient.NewLine,V.local.sTempFull)
+
+V.Local.sTemp.Set("")
+		'C
+		'PO#, Filler, Rec Type,
+		F.Intrinsic.String.Concat(V.local.sTemp,V.Global.sPONumber,"  C",V.Local.sTemp)
+		'vendor name
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenName,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",40,V.Local.sTemp)
+		'address 1
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenAdd1,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",70,V.Local.sTemp)
+		'address 2
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenAdd2,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",190,V.Local.sTemp)
+		
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenCity,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",210,V.Local.sTemp)
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenState,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",212,V.Local.sTemp)
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenZip,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",237,V.Local.sTemp)
+		'Attention
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenAttn,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",327,V.Local.sTemp)
+		'vendor id
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sVenID,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",490,V.Local.sTemp)
+		
+		F.Intrinsic.String.Concat(V.Local.sTempFull,V.Local.sTemp,V.Ambient.NewLine,V.local.sTempFull)
+		
+	F.Intrinsic.Control.EndIf
+
+V.Local.sTemp.Set("")
+	'--# Lines #--
+	'PO#, Line#
+	F.Intrinsic.Control.If(V.Local.sLine(1).Trim,>,"")
+		F.Intrinsic.String.LPad(V.Local.sLine(1),"0",3,V.Local.sField)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.Concat(V.local.sTemp,V.Global.sPONumber,V.Local.sField,V.local.sTemp)
+	'Part: #, Loc
+	F.Intrinsic.Control.If(V.Local.sLine(2).Trim,=,"")
+		V.Local.bUplSuccessful.set(False)
+		F.Intrinsic.String.Concat(V.Local.sUPLSummary,": Part Missing",V.Local.sUPLSummary)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.Concat(V.local.sTemp,V.Local.sLine(2).Trim,V.local.sTemp)
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",32,V.Local.sTemp)
+	'6282 - Grabbing description from inventory if not in upload
+	F.Intrinsic.Control.If(V.Local.sLine(3).Trim,>,"")
+		F.Intrinsic.String.Build("Select DESCRIPTION from V_INVENTORY_MSTR where PART = '{0}'",V.Local.sPart.Trim,V.Local.sSql)
+		F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSql,V.Local.sDesc)
+		F.Intrinsic.Control.If(V.Local.sDesc.Trim,=,"")
+			V.Local.bExceptions.Set(True)
+			F.Intrinsic.String.Concat(V.Local.sUPLSummary,V.Local.sPart,": Part or description not in inventory",V.Local.sUPLSummary)
+		F.Intrinsic.Control.Else
+			V.Local.sLine(3).Set(V.Local.sDesc.Trim)
+		F.Intrinsic.Control.EndIf
+		F.Intrinsic.String.Concat(V.local.sTemp,V.Local.sLine(3).Trim,V.local.sTemp)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",62,V.Local.sTemp)
+	'/6282
+	'UM
+	F.Intrinsic.Control.If(V.Local.sLine(5).Trim,>,"")
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sLine(5).Trim,V.Local.sTemp)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",65,V.Local.sTemp)
+	'JOB
+	F.Intrinsic.Control.If(V.Local.sJob(0).Length,>,0)
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sJob(0),V.Local.sTemp)
+		F.Intrinsic.Control.If(V.Local.sJob(2).Length,>,0)
+			F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sJob(2),V.Local.sTemp)
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",100,V.Local.sTemp)
+	'GL
+	F.Intrinsic.Control.If(V.Local.sLine(4).Trim,>,"")
+		F.Intrinsic.String.Build("select PURCHASING_ACCOUNT from v_product_line where product_line = '{0}'",V.Local.sLine(4).Trim,V.Local.sSql)
+		F.ODBC.Connection!Con.executeandreturn(V.Local.sSql,V.Local.sGL)
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sGL,V.Local.sTemp)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",121,V.Local.sTemp)
+	'PL
+	F.Intrinsic.Control.If(V.Local.sLine(4).Trim,>,"")
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sLine(4).Trim,V.Local.sTemp)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",124,V.Local.sTemp)
+	'due date
+	F.Intrinsic.Control.If(V.Local.sLine(7).Trim,>,"")
+		F.Intrinsic.Date.ConvertDString(V.Local.sLine(7),"MM/DD/YYYY",V.Local.dDate)
+		F.Intrinsic.String.Format(V.Local.dDate,"MMDDYY",V.Local.sField)
+		F.Intrinsic.String.Concat(V.local.sTemp,V.Local.sField,V.local.sTemp)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",136,V.Local.sTemp)
+	'Cost
+	F.Intrinsic.Control.If(V.Local.sLine(0).Trim,>,"")
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sLine(8).Trim,V.Local.sTemp)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",168,V.Local.sTemp)
+	'Quantity
+	F.Intrinsic.Control.If(V.Local.sLine(6).Trim,>,"")
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sLine(6),V.Local.sTemp)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",266,V.Local.sTemp)
+	'suffix
+	F.Intrinsic.Control.If(V.Local.sJob(0).Length,>,0)
+		F.Intrinsic.Control.If(V.Local.sJob(1),<>,"OOB")
+			F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sJob(1),V.Local.sTemp)
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.local.sTemp," ",269,V.Local.sTemp)
+	'6282 - Adding Manufacturer Name and Part number
+	
+	F.Intrinsic.String.Build("Select MFG_PART,MFG_NAME from INV_CROSS_REF where PART = '{0}' and VENDOR = '{1}'",V.Local.sPart.Trim,V.Local.sVenID.Trim,V.Local.sSql)
+	F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSql,V.Local.sSql)
+	F.Intrinsic.Control.If(V.Local.sSql.Trim,<>,"")
+		F.Intrinsic.String.Split(V.Local.sSql,"*!*",V.Local.sSql)
+		'Manufacturer Part #
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sSql(0).Trim,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",292,V.Local.sTemp)
+		'Manufacturer Name - with filler through exchange extension
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sSql(1).Trim,V.Local.sTemp)
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",358,V.Local.sTemp)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.String.RPad(V.Local.sTemp," ",358,V.Local.sTemp)
+	F.Intrinsic.Control.EndIf
+	'/6282
+	
+	'Line User_1
+	F.Intrinsic.Control.If(V.Local.sLine(10),<>,"OOB")
+		F.Intrinsic.String.Concat(V.Local.sTemp,V.Local.sLine(10),V.Local.sTemp)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.String.RPad(V.Local.sTemp," ",551,V.Local.sTemp)
+
+	F.Intrinsic.String.Concat(V.Local.sTempFull,V.Local.sTemp,V.Ambient.NewLine,V.Local.sTempFull)
+
+F.Intrinsic.Control.Next(V.Local.iCount)
+
+F.Intrinsic.Math.Add(V.Global.iWait,2.5,V.Global.iWait)
+F.Intrinsic.UI.ChangeWaitStatus("Generating . . .",V.Global.iWait)
+
+F.Intrinsic.Control.If(V.Local.bUplSuccessful,=,True)
+	'F.Intrinsic.String.Concat(V.Global.sPURORDER.Trim,V.Ambient.NewLine,V.Local.sPO,V.Global.sPURORDER)
+	V.Global.sPURORDER.Set(V.Local.sTempFull)
+	'Set Docs in DCC for selected PO#
+	F.Global.DocumentControl.CreateReference(V.Global.sPONumber,60,V.Local.iLinkID)
+	F.Intrinsic.string.split(V.Local.sDocs,"@!@",V.Local.sDocs)
+	F.Intrinsic.Control.For(V.Local.iCt,V.Local.sDocs.LBound,V.Local.sDocs.UBound,1)
+		F.Intrinsic.String.Split(V.Local.sDocs(V.Local.iCt),"*!*",V.Local.sLine)
+		F.Intrinsic.File.GetExtensionComponent(V.Local.sLine(1),V.Local.sFileType)
+		F.Intrinsic.String.Concat(".",V.Local.sFileType,V.Local.sFileType)
+		F.Global.DocumentControl.AddDocument(V.Local.iLinkID,V.Local.sLine(1),V.Local.sLine(0),-1,V.Local.sFileType)
+	F.Intrinsic.Control.Next(V.Local.iCt)
+	'Increment PO#
+	F.Intrinsic.Math.Add(V.Global.sPONumber,1,V.Global.sPONumber)
+	'Upload Summary
+	F.Intrinsic.control.If(V.Local.bExceptions,=,True)
+		F.Intrinsic.String.Concat(V.Global.sUPLSummary,"@!@",V.Args.FileName," Processed With exceptions","*!*",V.Local.sUPLSummary,V.Global.sUPLSummary)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.String.Concat(V.Global.sUPLSummary,"@!@",V.Args.FileName," Processed Successfully","*!*",V.Local.sUPLSummary,V.Global.sUPLSummary)
+	F.Intrinsic.Control.EndIf
+	'Move Files to History
+	v.Local.sSFileArray.Declare
+	f.Intrinsic.String.Split(v.Local.sFile,"\",v.Local.sSFileArray)
+	F.Intrinsic.String.Concat(V.Global.sDestDir,"\",V.Local.sSFileArray(v.Local.sSFileArray.UBound),V.Local.sTarget)
+	F.Intrinsic.File.CopyFile(V.Local.sFile,V.Local.sTarget)
+	F.Intrinsic.File.DeleteFile(V.Local.sFile)
+F.Intrinsic.Control.Else
+	F.Intrinsic.String.Concat(V.Global.sUPLSummary,"@!@",V.Args.FileName,": Upload Failed","*!*",V.Local.sUPLSummary,V.Global.sUPLSummary)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Math.Add(V.Global.iWait,2.5,V.Global.iWait)
+F.Intrinsic.UI.ChangeWaitStatus("Generating . . .",V.Global.iWait)
+
+F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.Label("PURORDER_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_6282_UPLPUROR.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.PURORDER.End
+
+Program.Sub.UploadPO.Start
+V.Local.sError.Declare(String)
+V.Local.iCt.Declare
+V.Local.iUserID.Declare
+V.Local.sEmail.Declare
+V.Local.sPURORDER.Declare
+V.Local.sSql.Declare
+V.Local.sTemp.Declare
+V.Local.sExText.Declare
+V.Local.sPOList.Declare
+V.Local.sPOListUB.Declare
+
+F.Intrinsic.Control.SetErrorHandler("UploadPO_Err")
+F.Intrinsic.Control.ClearErrors
+
+F.Intrinsic.Math.Add(V.Global.iWait,5,V.Global.iWait)
+F.Intrinsic.UI.ChangeWaitStatus("Uploading POs . . .",V.Global.iWait)
+
+'update Last PO number used
+F.Intrinsic.Control.If(V.Global.bPO,=,False)
+	F.Intrinsic.String.Split(V.Global.sPOList,V.Ambient.NewLine,V.Local.sPOList)
+	F.Intrinsic.String.RemoveArrayDuplicates(V.Local.sPOList,V.Local.sPOList)
+	'F.Intrinsic.String.LPad(V.Local.sPOList.UBound,"0",7,V.Local.sPOList.UBound)
+	F.Intrinsic.String.Concat("Update LAST_PO Set LAST_PO_NUM= '",V.Local.sPOList(V.Local.sPOList.UBound),"' where ASS_SYS='PUR' and ASS_SUB_SYS='CTL' ",V.Local.sSql)
+	F.Intrinsic.String.Build("Update OP_HEADER  Set F_LONG = '{0}' Where ID = 400301 and SEQUENCE = 000;",V.Local.sPOList(V.Local.sPOList.UBound),V.Local.sSQL)
+	F.ODBC.Connection!Con.Execute(V.Local.sSql)
+F.Intrinsic.Control.EndIf
+
+'Write PO info to PURORDER.txt
+F.Intrinsic.String.Concat(V.Caller.FilesDir,"\Purorder.txt",V.Local.sPURORDER)
+F.Intrinsic.File.String2File(V.Local.sPURORDER,V.global.sPURORDER)
+
+F.Intrinsic.Math.Add(V.Global.iWait,5,V.Global.iWait)
+F.Intrinsic.UI.ChangeWaitStatus("Uploading POs . . .",V.Global.iWait)
+
+'Upload POs
+F.Global.General.CallWrapperAsync(50,"UPLPUROR/U/A")
+
+'VT - 20210408 - creating method to upload the inventory extra text to the po line text.
+F.Intrinsic.String.Split(V.Global.sPOList,V.Ambient.NewLine,V.Global.sPOList)
+F.Intrinsic.String.RemoveArrayDuplicates(V.Global.sPOList,V.Global.sPOList)
+
+F.Intrinsic.String.Join(V.Global.sPOList,"','",V.Global.sPOList)
+
+'F.Intrinsic.String.Build("Select PURCHASE_ORDER,RECORD_NO,PART from V_PO_LINES where PURCHASE_ORDER in ('{0}')",V.Global.sPONumber.Trim,V.Local.sSql)
+F.Intrinsic.String.Build("Select PURCHASE_ORDER,RECORD_NO,PART from V_PO_LINES where PURCHASE_ORDER in ('{0}')",V.Global.sPOList.Trim,V.Local.sSql)
+
+F.Data.Datatable.CreateFromSQL("dtExDesc","Con",V.Local.sSql)
+
+F.Intrinsic.Control.For(V.Local.iCt,0,V.DataTable.dtExDesc.RowCount--,1)
+	F.Intrinsic.String.Build("Select TEXT from INV_EXTRA_TEXT where RTRIM(PART) = '{0}'",V.DataTable.dtExDesc(V.Local.iCt).PART!FieldValTrim,V.Local.sSql)
+	F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSql,V.Local.sExText)
+	
+	F.Intrinsic.Control.If(V.Local.sExText.Trim,<>,"")
+		F.Intrinsic.String.Build("Select * from PO_LN_TEXT where RTRIM(PO_NUM) = '{0}' and RTRIM(LINE) = '{1}'",V.DataTable.dtExDesc(V.Local.iCt).PURCHASE_ORDER!FieldValTrim,V.DataTable.dtExDesc(V.Local.iCt).RECORD_NO!FieldValTrim,V.Local.sSql)
+		F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSql,V.Local.sSql)
+		
+		F.Intrinsic.Control.If(V.Local.sSql.Trim,=,"")
+			F.Intrinsic.String.Build("Insert into PO_LN_TEXT (PO_NUM,LINE,TEXT) values('{0}','{1}','{2}')",V.DataTable.dtExDesc(V.Local.iCt).PURCHASE_ORDER!FieldValTrim,V.DataTable.dtExDesc(V.Local.iCt).RECORD_NO!FieldValTrim,V.Local.sExText.Trim,V.Local.sSql)
+		F.Intrinsic.Control.Else
+			F.Intrinsic.String.Build("Update PO_LN_TEXT set TEXT = '{0}' where RTRIM(PO_NUM) = '{1}' and RTRIM(LINE) = '{2}'",V.Local.sExText.Trim,V.DataTable.dtExDesc(V.Local.iCt).PURCHASE_ORDER!FieldValTrim,V.DataTable.dtExDesc(V.Local.iCt).RECORD_NO!FieldValTrim,V.Local.sSql)
+		F.Intrinsic.Control.EndIf
+		
+		F.ODBC.Connection!Con.Execute(V.Local.sSql)
+	F.Intrinsic.Control.EndIf
+	
+F.Intrinsic.Control.Next(V.Local.iCt)
+
+F.Data.DataTable.Close("dtExDesc")
+
+'Send status emails '(Subj*!*Body @!@ PO.CsV... )
+'6282 - Modified to remove email functionality and convert to status message
+F.Global.Security.GetUserID(V.Caller.User,V.Caller.CompanyCode,V.Local.iUserID)
+F.Intrinsic.String.Split(V.Global.sUPLSummary,"@!@",V.Global.sUPLSummary)
+F.Intrinsic.Control.For(V.Local.iCt,1,V.Global.sUPLSummary.UBound,1)
+	F.Intrinsic.Math.Add(V.Global.iWait,1,V.Global.iWait)
+	F.Intrinsic.UI.CloseWaitDialog
+	F.Intrinsic.String.Split(V.Global.sUPLSummary(V.Local.iCt),"*!*",V.Local.sEmail)
+	F.Intrinsic.UI.Msgbox(V.Local.sEmail(1),V.Local.sEmail(0))
+	'F.Global.Messaging.QueueMessage(V.Caller.CompanyCode,V.Local.iUserID,V.Caller.Caller,V.Local.sEmail(0),"GSS.response@vce.com","DCT.response@vce.com",V.Local.sEmail(1))
+F.Intrinsic.Control.Next(V.Local.iCt)
+'/6282
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("UploadPO_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_6282_UPLPUROR.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+Program.Sub.UploadPO.End
+
+Program.Sub.Comments.Start
+${$5$}$2.0.0.0$}$2
+${$6$}$Angel$}$20220131154515424$}$KXl0r/FkrMYwb/r4ukQ87aOTsTN7X2eaWCtnIlYofeRvz+Zjki7Tk0aGQ+YiUZ1iMO1RhPPyFm0=
+Program.Sub.Comments.End
